@@ -16,11 +16,11 @@ To use **vite-plugin-spriteify**, add it to your Vite configuration file (`vite.
 
 ```javascript
 // vite.config.js
-import { iconSpritesheet } from 'vite-plugin-icons-spritesheet';
+import { spriteify } from 'vite-plugin-spriteify';
 
 export default {
   plugins: [
-    iconSpritesheet({
+    spriteify({
       // Whether to generate TypeScript types (defaults to false)
       withTypes: true,
       // Path to the icon directory
@@ -28,7 +28,9 @@ export default {
       // Output path for the generated spritesheet and types
       outputDir: "public/icons",
       // Name of the generated spritesheet (defaults to sprite.svg)
-      fileName: "icon.svg",
+      fileName: "icons.svg",
+      // grouped Assets for each subfolders
+      grouped: false,
       // Current working directory (defaults to process.cwd())
       cwd: process.cwd(),
     }),

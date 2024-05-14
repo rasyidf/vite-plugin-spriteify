@@ -21,17 +21,12 @@ import { spriteify } from 'vite-plugin-spriteify';
 export default {
   plugins: [
     spriteify({
-      // Whether to generate TypeScript types (defaults to false)
-      withTypes: true,
-      // Path to the icon directory
       inputDir: "icons",
-      // Output path for the generated spritesheet and types
       outputDir: "public/icons",
-      // Name of the generated spritesheet (defaults to sprite.svg)
-      fileName: "icons.svg",
-      // grouped Assets for each subfolders
-      grouped: false,
-      // Current working directory (defaults to process.cwd())
+      fileName: "icons.svg", // optional, default is "sprite.svg"
+      typesFileName: "name.d.ts", // optional, default is "types.ts"
+      grouped: true, // default false, true if you want to group icons by directory
+      withTypes: true, // set it true if you want to generate TypeScript types
       cwd: process.cwd(),
     }),
   ],

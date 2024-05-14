@@ -1,23 +1,24 @@
 /*eslint-disable no-console */
+import chalk from "chalk";
 import { promises as fs } from "fs";
-import path from "path";
+import { mkdir } from "fs/promises";
 import { glob } from "glob";
 import { parse } from "node-html-parser";
-import chalk from "chalk";
+import path from "path";
 import type { Plugin } from "vite";
 import { normalizePath } from "vite";
-import { mkdir } from "fs/promises";
 
 interface PluginProps {
   withTypes?: boolean;
   inputDir: string;
   outputDir: string;
   fileName?: string;
+  typeFileName?: string;
   grouped?: boolean;
   cwd?: string;
 }
 
-const generateIcons = async ({ withTypes = false, inputDir, outputDir, grouped, cwd, fileName = "sprite.svg" }: PluginProps) => {
+const generateIcons = async ({ withTypes = false, inputDir, outputDir, grouped, cwd, fileName = "sprite.svg", typeFileName = "types.ts" }: PluginProps) => {
   const cwdToUse = cwd ?? process.cwd();
   const inputDirRelative = path.relative(cwdToUse, inputDir);
   const outputDirRelative = path.relative(cwdToUse, outputDir);
@@ -46,13 +47,11 @@ const generateIcons = async ({ withTypes = false, inputDir, outputDir, grouped, 
 
     // Generate SVG sprite for each group
     for (const groupDir in groupedFiles) {
-      const groupOutputDir = path.join(outputDir, groupDir);
-      await mkdir(groupOutputDir, { recursive: true });
       const groupFileName = fileName.replace('.svg', `_${groupDir}.svg`);
       await generateSvgSprite({
         files: groupedFiles[groupDir],
         inputDir,
-        outputPath: path.join(groupOutputDir, groupFileName),
+        outputPath: path.join(outputDir, groupFileName),
         outputDirRelative,
       });
     }
@@ -72,7 +71,7 @@ const generateIcons = async ({ withTypes = false, inputDir, outputDir, grouped, 
 
   await generateTypes({
     names: files.map((file: string) => fileNameToCamelCase(file.replace(/\.svg$/, ""))),
-    outputPath: path.join(outputDir, "types.ts"),
+    outputPath: path.join(outputDir, typeFileName),
   });
 
 };
@@ -97,38 +96,48 @@ async function generateSvgSprite({
   outputPath: string;
   outputDirRelative?: string;
 }) {
-  // Each SVG becomes a symbol and we wrap them all in a single SVG
-  const symbols = await Promise.all(
-    files.map(async (file) => {
-      const fileName = fileNameToCamelCase(file.replace(/\.svg$/, ""));
-      const input = await fs.readFile(path.join(inputDir, file), "utf8");
+  try {
+    // Each SVG becomes a symbol and we wrap them all in a single SVG
+    const symbols = await Promise.all(
+      files.map(async (file) => {
+        try {
+          const fileName = fileNameToCamelCase(file.replace(/\.svg$/, ""));
+          const input = await fs.readFile(path.join(inputDir, file), "utf8");
 
-      const root = parse(input);
-      const svg = root.querySelector("svg");
-      if (!svg) {
-        console.log(`⚠️ No SVG tag found in ${file}`);
-        return;
-      }
-      svg.tagName = "symbol";
-      svg.setAttribute("id", fileName);
-      svg.removeAttribute("xmlns");
-      svg.removeAttribute("xmlns:xlink");
-      svg.removeAttribute("version");
-      svg.removeAttribute("width");
-      svg.removeAttribute("height");
-      return svg.toString().trim();
-    })
-  );
-  const output = [
-    '<?xml version="1.0" encoding="UTF-8"?>',
-    '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="0" height="0">',
-    "<defs>", // for semantics: https://developer.mozilla.org/en-US/docs/Web/SVG/Element/defs
-    ...symbols.filter(Boolean),
-    "</defs>",
-    "</svg>",
-  ].join("\n");
+          const root = parse(input);
+          const svg = root.querySelector("svg");
+          if (!svg) {
+            console.log(`⚠️ No SVG tag found in ${file}`);
+            return;
+          }
+          svg.tagName = "symbol";
+          svg.setAttribute("id", fileName);
+          svg.removeAttribute("xmlns");
+          svg.removeAttribute("xmlns:xlink");
+          svg.removeAttribute("version");
+          svg.removeAttribute("width");
+          svg.removeAttribute("height");
+          return svg.toString().trim();
+        } catch (error) {
+          console.error(`❌ Error processing ${file}: ${error}`);
+          return;
+        }
+      })
+    );
 
-  return writeIfChanged(outputPath, output, `🖼️  Generated SVG spritesheet in ${chalk.green(outputDirRelative)}`);
+    const output = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="0" height="0">',
+      "<defs>",
+      ...symbols.filter(Boolean),
+      "</defs>",
+      "</svg>",
+    ].join("\n");
+
+    await writeIfChanged(outputPath, output, `🖼️  Generated SVG spritesheet in ${chalk.green(outputDirRelative)}`);
+  } catch (error) {
+    console.error(`❌ Error generating SVG spritesheet: ${error}`);
+  }
 }
 
 async function generateTypes({ names, outputPath }: { names: string[]; outputPath: string; }) {
@@ -153,38 +162,56 @@ async function generateTypes({ names, outputPath }: { names: string[]; outputPat
 }
 
 async function writeIfChanged(filepath: string, newContent: string, message: string) {
-  const currentContent = await fs.readFile(filepath, "utf8");
-  if (currentContent !== newContent) {
-    await fs.writeFile(filepath, newContent, "utf8");
-    console.log(message);
+  try {
+    await fs.access(filepath);
+    const currentContent = await fs.readFile(filepath, "utf8");
+    if (currentContent !== newContent) {
+      await fs.writeFile(filepath, newContent, "utf8");
+      console.log(message);
+    }
+  } catch (error: any) {
+    if (error?.code && error?.code === "ENOENT") {
+      await fs.writeFile(filepath, newContent, "utf8");
+      console.log(message);
+    } else {
+      console.error(`❌ Error accessing file ${filepath}: ${error}`);
+    }
   }
 }
 
-export const spriteify: (args: PluginProps) => Plugin = ({ withTypes, inputDir, outputDir, fileName, cwd }) => ({
-  name: "spriteify",
-  apply(config) {
-    return config.mode === "development";
-  },
-  async watchChange(file, type) {
-    const inputPath = normalizePath(path.join(cwd ?? process.cwd(), inputDir));
-    if (file.includes(inputPath) && file.endsWith(".svg") && ["create", "delete"].includes(type.event)) {
-      await generateIcons({
-        withTypes,
-        inputDir,
-        outputDir,
-        fileName,
-      });
-    }
-  },
-  async handleHotUpdate({ file }) {
-    const inputPath = normalizePath(path.join(cwd ?? process.cwd(), inputDir));
-    if (file.includes(inputPath) && file.endsWith(".svg")) {
-      await generateIcons({
-        withTypes,
-        inputDir,
-        outputDir,
-        fileName,
-      });
-    }
-  },
-});
+export function spriteify({ withTypes, inputDir, outputDir, fileName, typeFileName, grouped, cwd }: PluginProps): Plugin {
+  return ({
+    name: "spriteify",
+    apply(config) {
+      return config.mode === "development";
+    },
+    async watchChange(file, type) {
+      const inputPath = normalizePath(path.join(cwd ?? process.cwd(), inputDir));
+      if (file.includes(inputPath) && file.endsWith(".svg") && ["create", "delete"].includes(type.event)) {
+        await generateIcons({
+          withTypes,
+          inputDir,
+          outputDir,
+          fileName,
+          typeFileName,
+          grouped,
+          cwd
+        });
+      }
+    },
+    async handleHotUpdate({ file }) {
+      const inputPath = normalizePath(path.join(cwd ?? process.cwd(), inputDir));
+      if (file.includes(inputPath) && file.endsWith(".svg")) {
+        await generateIcons({
+          withTypes,
+          inputDir,
+          outputDir,
+          fileName,
+          typeFileName,
+          grouped,
+          cwd
+        });
+      }
+    },
+  });
+}

@@ -1,10 +1,16 @@
-name: Publish Package to npmjs
+# Github Action Workflow for Quality Check, make sure to install, test, and build
+name: Quality Check
 on:
-  release:
-    types: [published]
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main 
+
 jobs:
-  npm-publish:
-    name: Publish to npmjs
+  quality-check:
+    name: Quality Check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -36,6 +42,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-        
-      - run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
-      - run: pnpm publish --access public
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build

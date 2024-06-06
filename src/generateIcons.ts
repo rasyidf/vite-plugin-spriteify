@@ -3,22 +3,11 @@ import { mkdir, readFile } from 'fs/promises';
 import { glob } from 'glob';
 import { parse } from 'node-html-parser';
 import path from 'path';
+import { optimize } from 'svgo';
 import { logger } from './logger';
 import { GenerateSpriteProps, GenerateTypeProps, PluginProps } from "./types";
 import { toCamelCase, toTitleCase, writeIfChanged } from './utils';
 
-
-/**
- * Generates SVG icons or sprites based on the provided configuration.
- *
- * @param inputDir - The directory containing the input SVG files.
- * @param outputDir - The directory where the generated icons or sprites will be saved.
- * @param grouped - A boolean indicating whether the icons should be grouped into separate sprite files based on their directory.
- * @param cwd - The current working directory. If not provided, the process's current working directory will be used.
- * @param withTypes - A boolean indicating whether to generate TypeScript type definitions for the icons.
- * @param fileName - The name of the generated sprite file. Defaults to 'sprite.svg'.
- * @param typeFileName - The name of the generated TypeScript type definitions file. Defaults to 'types.ts'.
- */
 export const generateIcons = async ({
   inputDir,
   outputDir,
@@ -27,6 +16,8 @@ export const generateIcons = async ({
   withTypes = false,
   fileName = 'sprite.svg',
   typeFileName = 'types.ts',
+  optimize = false,
+  svgoConfig,
 }: PluginProps) => {
   const cwdToUse = cwd ?? process.cwd();
   const inputDirRelative = path.relative(cwdToUse, inputDir);
@@ -61,10 +52,12 @@ export const generateIcons = async ({
         inputDir,
         outputPath: path.join(outputDir, groupFileName),
         outputDirRelative,
+        optimize,
+        svgoConfig,
       });
       if (withTypes) {
         await generateTypes({
-          names: files.map((file) => toCamelCase(file.replace(/\.svg$/, ''))),
+          names: groupedFiles[groupDir].map((file) => toCamelCase(file.replace(/\.svg$/, ''))),
           outputPath: path.join(outputDir, groupTypeFileName),
           namespace: groupTypesafe,
         });
@@ -77,6 +70,8 @@ export const generateIcons = async ({
       inputDir,
       outputPath: path.join(outputDir, fileName),
       outputDirRelative,
+      optimize,
+      svgoConfig,
     });
     if (withTypes) {
       await generateTypes({
@@ -85,30 +80,24 @@ export const generateIcons = async ({
       });
     }
   }
-
-
 };
 
-
-
-/**
- * Generate an SVG spritesheet from a list of SVG files.
- *
- * @param {GenerateSpriteProps} props - The properties for generating the sprite.
- * @returns {Promise<void>} A Promise that resolves when the SVG spritesheet is generated.
- */
 const generateSvgSprite = async (props: GenerateSpriteProps): Promise<void> => {
   const { files, inputDir, outputPath, outputDirRelative } = props;
   try {
-    const processed = await Promise.all(files.map(file => processSvgFile(file, inputDir)));
+    const processed = await Promise.all(files.map(file => processSvgFile(file, inputDir, props.optimize, props.svgoConfig)));
 
-    const { symbols, styles } = processed.reduce((acc, { symbol, styles }) => {
+    const { symbols, defs, styles } = processed.reduce((acc, { symbol, defs, styles }) => {
       acc.symbols.push(symbol);
+      acc.defs.push(...defs);
       acc.styles.push(styles);
       return acc;
-    }, { symbols: [] as Array<string>, styles: [] as Array<string> });
+    }, { symbols: [] as Array<string>, defs: [] as Array<string>, styles: [] as Array<string> });
 
-    const output = createSvgSprite(symbols, styles);
+    // Deduplicate defs
+    const uniqueDefs = Array.from(new Set(defs));
+
+    const output = createSvgSprite(symbols, uniqueDefs, styles);
 
     await writeIfChanged(outputPath, output, `🖼️  Generated SVG spritesheet in ${chalk.green(outputDirRelative)}`);
   } catch (error) {
@@ -118,20 +107,18 @@ const generateSvgSprite = async (props: GenerateSpriteProps): Promise<void> => {
   }
 };
 
-/**
- * Process a single SVG file.
- *
- * @param {string} file - The name of the SVG file.
- * @param {string} inputDir - The directory where the SVG files are located.
- * @returns {Promise<string>} A Promise that resolves with the processed SVG symbol or an empty string if an error occurs.
- */
-const processSvgFile = async (file: string, inputDir: string): Promise<{ symbol: string, styles: string; }> => {
+const processSvgFile = async (file: string, inputDir: string, optimise?: boolean, options?: Record<string, any>): Promise<{ symbol: string, defs: string[], styles: string; }> => {
   try {
     const fileName = toCamelCase(file.replace(/\.svg$/, ''));
-    const input = await readFile(path.join(inputDir, file), 'utf8');
-
+    let input = await readFile(path.join(inputDir, file), 'utf8');
+    if (optimise) {
+      const optimizedSvg = optimize(input, { path: path.join(inputDir, file), ...options });
+      input = optimizedSvg.data;
+    }
+    
     const root = parse(input);
     const svg = root.querySelector('svg');
+
     if (!svg) {
       throw new Error(`No SVG tag found.`);
     }
@@ -142,8 +129,9 @@ const processSvgFile = async (file: string, inputDir: string): Promise<{ symbol:
     removeAttributes(svg as any, ['xmlns', 'xmlns:xlink', 'version', 'width', 'height']);
 
     const defs = svg.querySelector('defs');
+    const defNodes = defs ? defs.childNodes.map(child => child.toString()) : [];
+
     if (defs) {
-      defs.childNodes.forEach((child) => svg.appendChild(child));
       defs.remove();
     }
 
@@ -152,51 +140,35 @@ const processSvgFile = async (file: string, inputDir: string): Promise<{ symbol:
     // remove style tags from the svg
     root.querySelectorAll('style').forEach((style) => style.remove());
 
-    return { symbol: svg.toString(), styles: styles.join('\n') };
+    return { symbol: svg.toString(), defs: defNodes, styles: styles.join('\n') };
   } catch (error) {
     if (error instanceof Error) {
       logger.error(`Error processing ${file}: ${error.message}`);
     }
-    return { symbol: '', styles: '' };
+    return { symbol: '', defs: [], styles: '' };
   }
 };
 
-/**
- * Remove specified attributes from an SVG element.
- *
- * @param {HTMLElement } svg - The SVG element.
- * @param {Array<string>} attributes - The list of attributes to remove.
- */
 const removeAttributes = (svg: HTMLElement, attributes: Array<string>): void => {
   attributes.forEach(attr => svg.removeAttribute(attr));
 };
 
-/**
- * Create an SVG sprite from a list of symbols.
- *
- * @param {Array<string>} symbols - The list of SVG symbols.
- * @returns {string} The SVG sprite as a string.
- */
-const createSvgSprite = (symbols: Array<string>, styles: Array<string>): string => {
+const createSvgSprite = (symbols: Array<string>, defs: Array<string>, styles: Array<string>): string => {
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="0" height="0">',
     '<defs>',
-    ...symbols.filter(Boolean),
+    ...defs.filter(Boolean),
     '</defs>',
+    '<style>',
     ...styles.filter(Boolean),
+    '</style>',
+    ...symbols.filter(Boolean),
     '</svg>',
   ].join('\n');
 };
 
-/**
- * Generates icon types and exports them as a TypeScript module.
- * 
- * @param names - An array of icon names.
- * @param outputPath - The path where the generated TypeScript module will be saved.
- */
 const generateTypes = async ({ names, outputPath, namespace }: GenerateTypeProps) => {
-
   const output = [
     '// This file is generated by spriteify',
     '',

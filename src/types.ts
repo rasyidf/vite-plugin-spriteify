@@ -8,6 +8,8 @@ export interface PluginProps {
   grouped?: boolean;
   cwd?: string;
   changeEvent?: string;
+  optimize?: boolean;
+  svgoConfig?: Record<string, any>;
 }
 
 export type GenerateTypeProps = {
@@ -21,4 +23,6 @@ export type GenerateSpriteProps = {
   inputDir: string;
   outputPath: string;
   outputDirRelative?: string;
+  optimize?: boolean;
+  svgoConfig?: Record<string, any>;
 };

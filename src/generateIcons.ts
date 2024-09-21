@@ -1,185 +1,72 @@
-import chalk from 'chalk';
-import { mkdir, readFile } from 'fs/promises';
-import { glob } from 'glob';
-import { parse } from 'node-html-parser';
 import path from 'path';
-import { optimize } from 'svgo';
-import { logger } from './logger';
-import { GenerateSpriteProps, GenerateTypeProps, PluginProps } from "./types";
-import { toCamelCase, toTitleCase, writeIfChanged } from './utils';
+import { FileStats, PluginProps } from './types';
+import { generateSvgSprite } from './utils/generateSvgSprite';
+import { fileNameToCamelCase, getSvgFiles, transformIconName } from './utils/svgUtils';
+import { generateTypes } from './utils/typesUtils';
 
-export const generateIcons = async ({
-  inputDir,
-  outputDir,
-  grouped,
-  cwd,
-  withTypes = false,
-  fileName = 'sprite.svg',
-  typeFileName = 'types.ts',
-  optimize = false,
-  svgoConfig,
-}: PluginProps) => {
-  const cwdToUse = cwd ?? process.cwd();
-  const inputDirRelative = path.relative(cwdToUse, inputDir);
-  const outputDirRelative = path.relative(cwdToUse, outputDir);
-
-  const files = glob.sync('**/*.svg', {
-    cwd: inputDir,
-  });
-
-  if (files.length === 0) {
-    logger.warn(`No SVG files found in ${chalk.red(inputDirRelative)}`);
-    return;
+export const generateIcons = async (
+  options: PluginProps & {
+    changeEvent?: string;
+    inject: 'body-first' | 'body-last';
+    customDomId: string;
+    cache: Map<string, FileStats>;
   }
+) => {
+  const {
+    withTypes,
+    inputDir,
+    outputDir,
+    cwd,
+    formatter,
+    pathToFormatterConfig,
+    fileName,
+    typeFileName,
+    iconNameTransformer,
+    optimize: enableOptimize,
+    svgoConfig,
+    cache,
+  } = options;
 
-  await mkdir(outputDirRelative, { recursive: true });
+  const baseDir = cwd ?? process.cwd();
+  const inputDirRelative = path.relative(baseDir, inputDir);
+  const outputDirRelative = path.relative(baseDir, outputDir);
 
-  if (grouped) {
-    const groupedFiles: Record<string, string[]> = {};
-
-    files.forEach((file) => {
-      const directory = path.dirname(file);
-      groupedFiles[directory] = groupedFiles[directory] || [];
-      groupedFiles[directory].push(file);
-    });
-
-    for (const groupDir in groupedFiles) {
-      const groupTypesafe = toCamelCase(groupDir.replace(/[^a-zA-Z0-9]/g, '_'));
-      const groupFileName = fileName.replace('.svg', `_${groupTypesafe}.svg`);
-      const groupTypeFileName = typeFileName.replace('.ts', `_${groupTypesafe}.ts`);
-      await generateSvgSprite({
-        files: groupedFiles[groupDir],
-        inputDir,
-        outputPath: path.join(outputDir, groupFileName),
-        outputDirRelative,
-        optimize,
-        svgoConfig,
-      });
-      if (withTypes) {
-        await generateTypes({
-          names: groupedFiles[groupDir].map((file) => toCamelCase(file.replace(/\.svg$/, ''))),
-          outputPath: path.join(outputDir, groupTypeFileName),
-          namespace: groupTypesafe,
-        });
-      }
+  try {
+    const files = await getSvgFiles(inputDir);
+    if (files.length === 0) {
+      console.warn(`⚠️  No SVG files found in ${inputDirRelative}`);
+      return;
     }
 
-  } else {
     await generateSvgSprite({
       files,
       inputDir,
-      outputPath: path.join(outputDir, fileName),
-      outputDirRelative,
-      optimize,
+      outputPath: path.join(outputDir, fileName ?? 'sprite.svg'),
+      iconNameTransformer,
+      formatter,
+      pathToFormatterConfig,
+      optimize: enableOptimize as boolean,
       svgoConfig,
+      cache,
     });
+
     if (withTypes) {
+      const iconNames = files.map((file) =>
+        transformIconName(file, iconNameTransformer ?? fileNameToCamelCase)
+      );
       await generateTypes({
-        names: files.map((file) => toCamelCase(file.replace(/\.svg$/, ''))),
-        outputPath: path.join(outputDir, typeFileName),
+        names: iconNames,
+        outputPath: path.join(outputDir, typeFileName ?? 'types.ts'),
+        formatter,
+        pathToFormatterConfig,
       });
     }
-  }
-};
 
-const generateSvgSprite = async (props: GenerateSpriteProps): Promise<void> => {
-  const { files, inputDir, outputPath, outputDirRelative } = props;
-  try {
-    const processed = await Promise.all(files.map(file => processSvgFile(file, inputDir, props.optimize, props.svgoConfig)));
-
-    const { symbols, defs, styles } = processed.reduce((acc, { symbol, defs, styles }) => {
-      acc.symbols.push(symbol);
-      acc.defs.push(...defs);
-      acc.styles.push(styles);
-      return acc;
-    }, { symbols: [] as Array<string>, defs: [] as Array<string>, styles: [] as Array<string> });
-
-    // Deduplicate defs
-    const uniqueDefs = Array.from(new Set(defs));
-
-    const output = createSvgSprite(symbols, uniqueDefs, styles);
-
-    await writeIfChanged(outputPath, output, `🖼️  Generated SVG spritesheet in ${chalk.green(outputDirRelative)}`);
+    console.log(`✅  SVG sprite generated at ${outputDirRelative}`);
+    if (withTypes) {
+      console.log(`✅  Type definitions generated at ${typeFileName ?? 'types.ts'}`);
+    }
   } catch (error) {
-    if (error instanceof Error) {
-      logger.error(`Error generating SVG spritesheet: ${error.message}`);
-    }
+    console.error(`❌  Error generating icons: ${(error as Error).message}`);
   }
-};
-
-const processSvgFile = async (file: string, inputDir: string, optimise?: boolean, options?: Record<string, any>): Promise<{ symbol: string, defs: string[], styles: string; }> => {
-  try {
-    const fileName = toCamelCase(file.replace(/\.svg$/, ''));
-    let input = await readFile(path.join(inputDir, file), 'utf8');
-    if (optimise) {
-      const optimizedSvg = optimize(input, { path: path.join(inputDir, file), ...options });
-      input = optimizedSvg.data;
-    }
-    
-    const root = parse(input);
-    const svg = root.querySelector('svg');
-
-    if (!svg) {
-      throw new Error(`No SVG tag found.`);
-    }
-
-    svg.tagName = 'symbol';
-    svg.setAttribute('id', fileName);
-
-    removeAttributes(svg as any, ['xmlns', 'xmlns:xlink', 'version', 'width', 'height']);
-
-    const defs = svg.querySelector('defs');
-    const defNodes = defs ? defs.childNodes.map(child => child.toString()) : [];
-
-    if (defs) {
-      defs.remove();
-    }
-
-    const styles = root.querySelectorAll('style').map((style) => style.toString());
-
-    // remove style tags from the svg
-    root.querySelectorAll('style').forEach((style) => style.remove());
-
-    return { symbol: svg.toString(), defs: defNodes, styles: styles.join('\n') };
-  } catch (error) {
-    if (error instanceof Error) {
-      logger.error(`Error processing ${file}: ${error.message}`);
-    }
-    return { symbol: '', defs: [], styles: '' };
-  }
-};
-
-const removeAttributes = (svg: HTMLElement, attributes: Array<string>): void => {
-  attributes.forEach(attr => svg.removeAttribute(attr));
-};
-
-const createSvgSprite = (symbols: Array<string>, defs: Array<string>, styles: Array<string>): string => {
-  return [
-    '<?xml version="1.0" encoding="UTF-8"?>',
-    '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="0" height="0">',
-    '<defs>',
-    ...defs.filter(Boolean),
-    '</defs>',
-    '<style>',
-    ...styles.filter(Boolean),
-    '</style>',
-    ...symbols.filter(Boolean),
-    '</svg>',
-  ].join('\n');
-};
-
-const generateTypes = async ({ names, outputPath, namespace }: GenerateTypeProps) => {
-  const output = [
-    '// This file is generated by spriteify',
-    '',
-    `export type ${namespace ? `${toTitleCase(namespace)}IconName` : 'IconName'} =`,
-    ...names.map((name) => ` | "${name}"`),
-    '',
-    `export const ${namespace ? `${toTitleCase(namespace)}IconNames` : 'iconNames'} = [`,
-    ...names.map((name) => ` "${name}",`),
-    '] as const',
-    '',
-  ].join('\n');
-
-  await writeIfChanged(outputPath, output, `${chalk.blueBright('TS')} Generated icon types in ${chalk.green(outputPath)}`);
 };

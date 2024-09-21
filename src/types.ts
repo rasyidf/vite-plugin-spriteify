@@ -1,28 +1,25 @@
+import type { Config } from 'svgo';
+
+export interface FileStats {
+  symbolId: string;
+  code: string;
+}
 
 export interface PluginProps {
   inputDir: string;
   outputDir: string;
+  cwd?: string;
+  svgoConfig?: Config;
+  inject?: 'body-first' | 'body-last';
+  customDomId?: string;
   withTypes?: boolean;
+  formatter?: Formatter;
+  pathToFormatterConfig?: string;
   fileName?: string;
   typeFileName?: string;
-  grouped?: boolean;
-  cwd?: string;
-  changeEvent?: string;
+  iconNameTransformer?: (fileName: string) => string;
   optimize?: boolean;
-  svgoConfig?: Record<string, any>;
+  symbolId?: string;
 }
 
-export type GenerateTypeProps = {
-  names: string[];
-  outputPath: string;
-  namespace?: string;
-};
-
-export type GenerateSpriteProps = {
-  files: string[];
-  inputDir: string;
-  outputPath: string;
-  outputDirRelative?: string;
-  optimize?: boolean;
-  svgoConfig?: Record<string, any>;
-};
+export type Formatter = 'prettier' | undefined;

@@ -3,6 +3,8 @@ import type { Config } from 'svgo';
 export interface FileStats {
   symbolId: string;
   code: string;
+  hash: string;
+  isDynamic: boolean;
 }
 
 export interface PluginProps {
@@ -20,6 +22,7 @@ export interface PluginProps {
   iconNameTransformer?: (fileName: string) => string;
   optimize?: boolean;
   symbolId?: string;
+  debug?: boolean;
 }
 
-export type Formatter = 'prettier' | undefined;
+export type Formatter = 'prettier' | "biome" | undefined;

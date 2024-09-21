@@ -26,13 +26,15 @@ export const transformIconName = (
 };
 
 /**
- * Converts kebab-case filenames to CamelCase.
+ * Converts kebab-case-fold filenames to camelCaseFold, first letter is lowercase.
  */
 export const fileNameToCamelCase = (fileName: string): string => {
-  return fileName
-    .split(/[-_ ]+/)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join('');
+  const PascalCase = fileName.replace(
+    /-([a-z])/g,
+    (match, letter) => letter.toUpperCase()
+
+  );
+  return PascalCase.charAt(0).toLowerCase() + PascalCase.slice(1);
 };
 
 /**

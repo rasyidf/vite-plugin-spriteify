@@ -6,7 +6,7 @@ import { FileStats, PluginProps } from '../types';
 import { generateSvgSprite } from './generateSvgSprite';
 import { createSymbolId, fileNameToCamelCase, getSvgFiles, transformIconName } from './svgUtils';
 import { generateTypes } from './typesUtils';
- 
+
 
 /**
  * Generates the SVG sprite and optional TypeScript types.
@@ -104,8 +104,8 @@ export const compileIcons = async (
         const symbolId = createSymbolId(file, options);
         const svgSymbol = await compileIcon(filePath, symbolId, svgOptions, enableOptimize as boolean);
         if (svgSymbol) {
-          cache.set(filePath, { symbolId, code: svgSymbol });
-          stats = { symbolId, code: svgSymbol };
+          cache.set(filePath, { symbolId, code: svgSymbol, isDynamic: false, hash: '' });
+          stats = { symbolId, code: svgSymbol, isDynamic: false, hash: '' };
         }
       }
 

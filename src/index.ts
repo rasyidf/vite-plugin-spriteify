@@ -1,19 +1,20 @@
 import Debug from 'debug';
 import getEtag from 'etag';
 import path from 'path';
-import type { Plugin } from 'vite';
+import type { PluginOption } from 'vite';
 import { normalizePath } from 'vite';
 
 import { generateIcons } from './generateIcons';
 import { FileStats, PluginProps } from './types';
 import { createModuleCode } from './utils/moduleCode';
+import { debounce } from './utils/debounce';
 
 const debug = Debug('vite-plugin-spriteify');
 
 /**
  * Main function to create the spriteify plugin.
  */
-export function spriteify(options: PluginProps): Plugin {
+export function spriteify(options: PluginProps) {
   const {
     inputDir,
     cwd,
@@ -25,10 +26,19 @@ export function spriteify(options: PluginProps): Plugin {
   const cache = new Map<string, FileStats>();
   const inputPath = normalizePath(path.join(cwd ?? process.cwd(), inputDir));
 
+  const debouncedGenerateIcons = debounce(async () => {
+    await generateIcons({
+      ...options,
+      inject,
+      customDomId,
+      cache,
+    });
+  }, 300);
+
   return {
     name: 'vite-plugin-spriteify',
     apply(config) {
-      return config.mode === 'development';
+      return config.mode !== 'production';
     },
 
     /**
@@ -40,15 +50,9 @@ export function spriteify(options: PluginProps): Plugin {
       if (
         file.includes(inputPath) &&
         file.endsWith('.svg') &&
-        ['add', 'change', 'unlink'].includes(change.event)
+        ['create', 'update', 'delete'].includes(change.event)
       ) {
-        await generateIcons({
-          ...options,
-          changeEvent: change.event,
-          inject,
-          customDomId,
-          cache,
-        });
+        debouncedGenerateIcons();
       }
     },
 
@@ -85,5 +89,5 @@ export function spriteify(options: PluginProps): Plugin {
         }
       });
     },
-  };
+  } as PluginOption;
 }
